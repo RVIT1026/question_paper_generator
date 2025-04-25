@@ -1,0 +1,9 @@
+streamlit==1.31.0
+pandas==2.2.2
+mysql-connector-python==9.0.0
+reportlab==4.2.2
+Pillow==10.4.0
+cloudinary==1.41.0
+requests==2.32.3
+xlsxwriter==3.2.0
+openpyxl==3.1.5
