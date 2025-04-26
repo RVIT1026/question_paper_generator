@@ -22,7 +22,12 @@ import base64
 import hashlib
 import tempfile
 import shutil
+import boto3
+from botocore.exceptions import ClientError
+import requests
 
+# Ensure images directory exists
+os.makedirs("images", exist_ok=True)
 # UI Configuration
 st.set_page_config(
     page_title="RVIT - Question Paper Generator",
@@ -202,17 +207,26 @@ def add_default_pattern(subject: str, exam: ExamType):
 
 def get_db_connection():
     try:
+        # Access secrets from Streamlit
+        db_config = st.secrets["database"]
+        
+        # Path to SSL CA certificate (relative to project root or bundled with app)
+        ssl_ca_path = db_config.get("SSL_CA_PATH", "certs/tidb-ca-cert.pem")
+        
+        # Establish connection with SSL
         connection = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",
-            database="qb_db"
+            host=db_config["DB_HOST"],
+            user=db_config["DB_USER"],
+            password=db_config["DB_PASSWORD"],
+            database=db_config["DB_NAME"],
+            port=int(db_config["DB_PORT"]),
+            ssl_ca=ssl_ca_path,
+            ssl_verify_cert=True
         )
         return connection
     except mysql.connector.Error as e:
         st.error(f"Database connection error: {str(e)}")
         return None
-
 def sanitize_table_name(name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9_]', '', name.replace(" ", "_").replace("(", "").replace(")", "").replace("&", "and"))
 
@@ -231,17 +245,21 @@ def configure_question_image(img: Image, max_width: int = 250, max_height: int =
     return new_width, new_height
 
 def get_image_paths(subject: str) -> Dict[int, str]:
-    subject_folder = subject.split('(')[0].strip()
-    img_folder = os.path.join("Img", subject_folder)
+    subject_folder = subject.split('(')[0].strip().replace(" ", "_")
+    image_dir = os.path.join("images", subject_folder)
     image_paths = {}
-    if os.path.exists(img_folder):
-        for file in os.listdir(img_folder):
-            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                try:
-                    sno = int(file.split('.')[0])
-                    image_paths[sno] = os.path.join(img_folder, file)
-                except ValueError:
-                    continue
+    
+    # Create the directory if it doesn't exist
+    os.makedirs(image_dir, exist_ok=True)
+    
+    # List all image files in the directory
+    for file_name in os.listdir(image_dir):
+        if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+            try:
+                sno = int(file_name.split('.')[0])
+                image_paths[sno] = os.path.join(image_dir, file_name)
+            except ValueError:
+                continue
     return image_paths
 
 class CustomDocTemplate(SimpleDocTemplate):
@@ -414,8 +432,8 @@ def upload_zip_and_extract(subject: str, table_name: str):
     st.write("Upload a ZIP file containing images (named as sno, e.g., 1.jpg, 2.png):")
     uploaded_zip = st.file_uploader("Choose a ZIP file", type=['zip'], key=f"zip_{table_name}")
     if uploaded_zip:
-        subject_folder = subject.split('(')[0].strip()
-        img_folder = os.path.join("Img", subject_folder)
+        subject_folder = subject.split('(')[0].strip().replace(" ", "_")
+        img_folder = os.path.join("images", subject_folder)
         os.makedirs(img_folder, exist_ok=True)
         
         # Compute hash to avoid processing the same file multiple times
@@ -498,20 +516,21 @@ def upload_single_image_for_sno(subject: str, table_name: str, df: pd.DataFrame)
     if uploaded_image and selected_sno:
         try:
             sno = int(selected_sno)
-            subject_folder = subject.split('(')[0].strip()
-            img_folder = os.path.join("Img", subject_folder)
+            subject_folder = subject.split('(')[0].strip().replace(" ", "_")
+            img_folder = os.path.join("images", subject_folder)
             os.makedirs(img_folder, exist_ok=True)
             
-            # Compute hash from binary data to avoid duplicate processing
-            file_hash = hashlib.md5(uploaded_image.getvalue()).hexdigest()
-            if st.session_state.get(f"processed_image_{table_name}_{file_hash}", False):
-                st.info("This image has already been processed in this session.")
+            file_extension = uploaded_image.name.split('.')[-1].lower()
+            if file_extension not in ['jpg', 'jpeg', 'png']:
+                st.error("Only JPG, JPEG, or PNG files are allowed.")
                 return
             
-            img_path = os.path.join(img_folder, f"{sno}.{uploaded_image.name.split('.')[-1]}")
+            # Save the image to the subject folder
+            img_path = os.path.join(img_folder, f"{sno}.{file_extension}")
             with open(img_path, "wb") as f:
-                f.write(uploaded_image.getbuffer())  # Write binary data directly
+                f.write(uploaded_image.getbuffer())
             
+            # Update the database with the image path
             connection = get_db_connection()
             if connection:
                 try:
@@ -522,9 +541,8 @@ def upload_single_image_for_sno(subject: str, table_name: str, df: pd.DataFrame)
                         WHERE sno = %s
                     """, (img_path, sno))
                     connection.commit()
-                    st.success(f"Image '{uploaded_image.name}' uploaded and linked to sno {sno} at '{img_path}'!")
-                    
-                    st.session_state[f"processed_image_{table_name}_{file_hash}"] = True
+                    st.success(f"Image uploaded and linked to sno {sno} at '{img_path}'!")
+                    st.session_state[f"processed_image_{table_name}_{hashlib.md5(uploaded_image.getvalue()).hexdigest()}"] = True
                     if f"processed_image_{table_name}" not in st.session_state:
                         st.session_state[f"processed_image_{table_name}"] = True
                         st.rerun()
@@ -539,7 +557,7 @@ def upload_single_image_for_sno(subject: str, table_name: str, df: pd.DataFrame)
             st.error("Selected sno must be a valid number.")
         except Exception as e:
             st.error(f"Error uploading image: {str(e)}")
-
+                        
 def download_table_to_excel(df: pd.DataFrame, subject: str):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -1277,24 +1295,27 @@ def generate_pdf_with_header(part_a: pd.DataFrame, part_b: pd.DataFrame,
         elements = []
         if image_path and os.path.exists(image_path):
             try:
-                with open(image_path, 'rb') as f:
-                    img_data = BytesIO(f.read())
-                img = Image.open(img_data)
+                with open(image_path,'rb') as f:
+                    img_data=BytesIO(f.read())
+                img=Image.open(img_data)
                 if img.mode == 'RGBA':
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    background.paste(img, mask=img.split()[3])
-                    img = background
-                elif img.mode not in ['RGB', 'L']:
+                    background=Image.new('RGB',img.size,(255,255,255))
+                    background.paste(img,mask=img.split()[3])
+                    img=background
+                elif img.mode not in ['RGB','L']:
                     img = img.convert('RGB')
-                width, height = configure_question_image(img, max_image_width)
+                width, height = configure_question_image(img,max_image_width)
                 img_byte_arr = BytesIO()
-                img.save(img_byte_arr, format='JPEG', quality=85, optimize=True)
+                img.save(img_byte_arr, format = 'JPEG', quality=85,optimize=True)
                 img_byte_arr = img_byte_arr.getvalue()
                 img_reader = BytesIO(img_byte_arr)
                 elements.append(RLImage(img_reader, width=width, height=height))
             except Exception as e:
                 elements.append(Paragraph(f"[Error loading image: {str(e)}]", styles['Normal']))
+        else:
+            elements.append(Paragraph("[No image available]", styles['Normal']))
         return elements
+                
 
     # Skip rvitlogo_f.jpg and use only rvit_exam_header_f.png
     exam_header_path = "img/rvit_exam_header_f.png"
