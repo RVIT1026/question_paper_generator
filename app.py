@@ -1351,10 +1351,18 @@ def generate_pdf_with_header(part_a: pd.DataFrame, part_b: pd.DataFrame,
             f"{header_info['exam_type']} EXAMINATION {header_info['month_year']}"
         )
         story.append(Paragraph(exam_header, styles['ExamHeader']))
-
-    story.append(Spacer(1, 2))
+        
+    # Add line below the header
+    story.append(Spacer(1, 6))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-    story.append(Spacer(1, 2))
+
+# Exam title without yellow background
+    exam_title = f"{header_info['academic_level']} {header_info['semester']} SEMESTER {header_info['exam_type']} EXAMINATION {header_info['month_year']}"
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(exam_title, styles['Title']))
+    
+
+
 
     exam_time = "2 Hours" if header_info['exam_type'] in ["I MID", "II MID"] else "3 Hours"
     max_marks = "25M" if header_info['exam_type'] in ["I MID", "II MID"] else "70M"
