@@ -157,7 +157,8 @@ def add_default_pattern(subject: str, exam: ExamType):
     else:
         units_mid1_2 = {1: {'short': 3, 'long': 3}, 2: {'short': 2, 'long': 3}}
         units_mid1_2_5 = {1: {'short': 2, 'long': 2}, 2: {'short': 2, 'long': 2}, 3.1: {'short': 1, 'long': 2}}
-        units_mid2_3_4_5 = {3: {'short': 2, 'long': 2}, 4: {'short': 2, 'long': 2}, 5: {'short': 1, 'long': 2}}
+        units_mid2_3_4_5 = {3.1: {'short': 2, 'long': 2}, 4: {'short': 2, 'long': 2}, 5: {'short': 1, 'long': 2}}
+        units_mid2_5_5 = {3.2: {'short': 2, 'long': 2}, 4: {'short': 2, 'long': 2}, 5: {'short': 1, 'long': 2}}
         units_regular = {1: {'short': 2, 'long': 2}, 2: {'short': 2, 'long': 2}, 3.1: {'short': 1, 'long': 1},
                          3.2: {'short': 1, 'long': 1}, 4: {'short': 2, 'long': 2}, 5: {'short': 2, 'long': 2}}
 
@@ -183,9 +184,14 @@ def add_default_pattern(subject: str, exam: ExamType):
             marks_b=(3, 5)
         )
     elif exam == ExamType.MID2_5_5:
+        if subject in ["Basic Civil & Mechanical Engineering (RV23991T04)", 
+                       "Basic Electrical & Electronics Engineering (RV23991T07)"]:
+            units = units_mid2_3_4_5  # Same as MID2_3_4_5 for special subjects
+        else:
+            units = units_mid2_5_5
         PATTERNS[(subject, exam)] = QuestionPattern(
-            part_a={unit: {'short': count['short']} for unit, count in units_mid2_3_4_5.items()},
-            part_b={unit: {'long': count['long']} for unit, count in units_mid2_3_4_5.items()},
+            part_a={unit: {'short': count['short']} for unit, count in units.items()},
+            part_b={unit: {'long': count['long']} for unit, count in units.items()},
             marks_a=(5, 2),
             marks_b=(3, 5)
         )
@@ -354,10 +360,21 @@ def create_table(subject: str):
             )
         """)
         
-        units = [
-            (1, 12, "1"), (13, 24, "2"), (25, 30, "3.1"),
-            (31, 36, "3.2"), (37, 48, "4"), (49, 60, "5")
-        ]
+        # Conditional units based on subject
+        if subject in ["Basic Civil & Mechanical Engineering (RV23991T04)", 
+                       "Basic Electrical & Electronics Engineering (RV23991T07)"]:
+            units = [
+                (1, 12, "1"), (13, 24, "2"), (25, 36, "3"),
+                (37, 48, "4"), (49, 60, "5"), (61, 72, "6")
+            ]
+            max_sno = 72
+        else:
+            units = [
+                (1, 12, "1"), (13, 24, "2"), (25, 30, "3.1"),
+                (31, 36, "3.2"), (37, 48, "4"), (49, 60, "5")
+            ]
+            max_sno = 60
+        
         type_assignments = []
         for start, end, unit in units:
             short_count = 3 if unit in ["3.1", "3.2"] else 6
@@ -368,7 +385,7 @@ def create_table(subject: str):
         
         image_paths = get_image_paths(subject)
         
-        for i in range(1, 61):
+        for i in range(1, max_sno + 1):
             unit = next((u for s, e, u in units if s <= i <= e), "")
             question = image_paths.get(i, "")
             q_type = type_assignments[i-1] if i-1 < len(type_assignments) else "long"
@@ -1256,7 +1273,7 @@ def generate_pdf_with_header(part_a: pd.DataFrame, part_b: pd.DataFrame,
     styles.add(ParagraphStyle(
         'CollegeHeader',
         parent=styles['Title'],
-        fontSize=16,
+        fontSize=14,
         alignment=1,
         spaceAfter=2
     ))
@@ -1517,6 +1534,11 @@ def main():
             4. Manage users (add, edit, delete) in the 'Manage Users' section
             """)
 
+    special_subjects = [
+        "Basic Civil & Mechanical Engineering (RV23991T04)",
+        "Basic Electrical & Electronics Engineering (RV23991T07)"
+    ]
+
     if role == "faculty":
         manage_subjects()
         
@@ -1577,14 +1599,37 @@ def main():
                 )
             
             with col2:
+                exam_options = []
                 if header_info['exam_type'] == "I MID":
-                    exam_options = [ExamType.MID1_2.value, ExamType.MID1_2_5.value]
+                    if subject in special_subjects:
+                        exam_options = ["mid1 (Unit- 1, 2)", "mid1 (Unit- 1, 2 & 3)"]
+                    else:
+                        exam_options = [ExamType.MID1_2.value, ExamType.MID1_2_5.value]
                 elif header_info['exam_type'] == "II MID":
-                    exam_options = [ExamType.MID2_3_4_5.value, ExamType.MID2_5_5.value]
+                    if subject in special_subjects:
+                        exam_options = ["mid2 (Unit- 4, 5 & 6)"]
+                    else:
+                        exam_options = [ExamType.MID2_3_4_5.value, ExamType.MID2_5_5.value]
                 else:
                     exam_options = [ExamType.REGULAR.value, ExamType.SUPPLY.value]
                 exam_value = st.selectbox("Select Question Pattern", exam_options)
-                exam = next((e for e in ExamType if e.value == exam_value), ExamType.REGULAR)
+                # Map to ExamType
+                if exam_value == "mid1 (Unit- 1, 2)":
+                    exam = ExamType.MID1_2
+                elif exam_value in ["mid1 (Unit- 1, 2 & 3.1)", "mid1 (Unit- 1, 2 & 3)"]:
+                    exam = ExamType.MID1_2_5
+                elif exam_value == "mid2 (Unit- 3, 4 & 5)":
+                    exam = ExamType.MID2_3_4_5
+                elif exam_value == "mid2 (Unit- 3.2, 4 & 5)":
+                    exam = ExamType.MID2_5_5
+                elif exam_value == "mid2 (Unit- 4, 5 & 6)":
+                    exam = ExamType.MID2_3_4_5
+                elif exam_value == "regular":
+                    exam = ExamType.REGULAR
+                elif exam_value == "supply":
+                    exam = ExamType.SUPPLY
+                else:
+                    exam = ExamType.REGULAR
             
             if st.button("🎯 Generate Question Paper", use_container_width=True):
                 if not available_subjects or subject == "No subjects available":
